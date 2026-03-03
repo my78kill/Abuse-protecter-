@@ -1,24 +1,5 @@
 ENGLISH_BAD_WORDS = [
-    "fuck",
-    "fuk",
-    "fcker",
-    "fcker",
-    "bitch",
-    "asshole",
-    "asshol",
-    "bastard",
-    "slut",
-    "dick",
-    "cock",
-    "pussy",
-    "whore",
-    "motherfuck",
-    "mf",
-    "rape",
-    "rapist",
-    "niga",
-    "nigg",
-    "retard",
-    "shit",
-    "bullshit"
+    "fuck", "motherf", "sisterf", "bitch",
+    "asshole", "bastard", "sex", "sux", "milf", "boobs", "nipple", "xx", "xxx", "slut",
+    "dick", "pussy"
 ]
