@@ -12,8 +12,11 @@ from badwords_english import ENGLISH_BAD_WORDS
 BOT_TOKEN = "8661390665:AAEvNvlvNBHi8j6n4rwtO3yVqVl-D63CEOo"
 MAX_WARNINGS = 3
 
-bot = telebot.TeleBot(BOT_TOKEN)
-warnings = defaultdict(int)
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="Markdown")
+
+# warnings structure:
+# { chat_id: { user_id: warning_count } }
+warnings = defaultdict(lambda: defaultdict(int))
 
 BAD_WORDS = HINDI_BAD_WORDS + ENGLISH_BAD_WORDS
 
@@ -23,6 +26,7 @@ def normalize(text):
     text = text.replace("@", "a").replace("0", "o").replace("$", "s")
     text = re.sub(r'[^a-zA-Zअ-ह]', '', text)
     return text
+
 
 # ================= START COMMAND =================
 @bot.message_handler(commands=['start'])
@@ -35,37 +39,50 @@ def send_welcome(message):
             "🔹 Features:\n"
             "• Detect Hindi & English abusive words\n"
             "• Auto delete abusive messages\n"
-            "• 3 Warning system\n"
+            "• 3 Warning system (Group wise)\n"
             "• Auto mute after 3 warnings\n"
             "• Inline Unmute button\n\n"
             "Add me to your group and make me admin "
-            "with delete + restrict permissions."
+            "with Delete + Restrict permissions."
         )
 
+
 # ================= GROUP MESSAGE FILTER =================
-@bot.message_handler(func=lambda message: True, content_types=['text'])
+@bot.message_handler(content_types=['text'])
 def check_abuse(message):
+
     if message.chat.type not in ["group", "supergroup"]:
         return
 
-    user_id = message.from_user.id
     chat_id = message.chat.id
-    username = message.from_user.first_name
+    user_id = message.from_user.id
+    username = message.from_user.first_name or "User"
+
+    # 🔹 Skip admins
+    member = bot.get_chat_member(chat_id, user_id)
+    if member.status in ["administrator", "creator"]:
+        return
 
     text = normalize(message.text)
 
     for word in BAD_WORDS:
         if word in text:
+
+            # Delete message
             try:
                 bot.delete_message(chat_id, message.message_id)
             except:
                 return
 
-            warnings[user_id] += 1
+            # Increase warning group-wise
+            warnings[chat_id][user_id] += 1
+            current_warn = warnings[chat_id][user_id]
 
             mention = f"[{username}](tg://user?id={user_id})"
 
-            if warnings[user_id] >= MAX_WARNINGS:
+            # 🔥 MUTE CONDITION
+            if current_warn >= MAX_WARNINGS:
+
                 try:
                     bot.restrict_chat_member(
                         chat_id,
@@ -73,45 +90,51 @@ def check_abuse(message):
                         can_send_messages=False
                     )
 
-                    # Unmute Button
                     markup = InlineKeyboardMarkup()
                     markup.add(
                         InlineKeyboardButton(
                             "🔓 Unmute",
-                            callback_data=f"unmute_{user_id}"
+                            callback_data=f"unmute:{chat_id}:{user_id}"
                         )
                     )
 
                     bot.send_message(
                         chat_id,
                         f"🚫 {mention} muted after {MAX_WARNINGS} warnings.",
-                        parse_mode="Markdown",
                         reply_markup=markup
                     )
 
                 except:
                     pass
 
-                warnings[user_id] = 0
+                # Reset warning after mute
+                warnings[chat_id][user_id] = 0
 
             else:
                 bot.send_message(
                     chat_id,
-                    f"⚠ {mention} Warning {warnings[user_id]}/{MAX_WARNINGS}\nAbusive language not allowed.",
-                    parse_mode="Markdown"
+                    f"⚠ {mention} Warning {current_warn}/{MAX_WARNINGS}"
                 )
+
             break
 
-# ================= UNMUTE BUTTON HANDLER =================
-@bot.callback_query_handler(func=lambda call: call.data.startswith("unmute_"))
-def unmute_user(call):
-    chat_id = call.message.chat.id
-    user_id = int(call.data.split("_")[1])
 
-    # Check if button clicker is admin
+# ================= UNMUTE BUTTON =================
+@bot.callback_query_handler(func=lambda call: call.data.startswith("unmute:"))
+def unmute_user(call):
+
+    data = call.data.split(":")
+    chat_id = int(data[1])
+    user_id = int(data[2])
+
+    # 🔹 Only admins can unmute
     member = bot.get_chat_member(chat_id, call.from_user.id)
     if member.status not in ["administrator", "creator"]:
-        bot.answer_callback_query(call.id, "Only admins can unmute!", show_alert=True)
+        bot.answer_callback_query(
+            call.id,
+            "Only admins can unmute!",
+            show_alert=True
+        )
         return
 
     try:
@@ -130,6 +153,7 @@ def unmute_user(call):
     except:
         pass
 
+
 # ================= RUN FLASK + BOT =================
 if __name__ == "__main__":
     threading.Thread(
@@ -138,4 +162,4 @@ if __name__ == "__main__":
     ).start()
 
     print("Bot is running...")
-    bot.infinity_polling()
+    bot.infinity_polling(skip_pending=True)
