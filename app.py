@@ -1,119 +1,91 @@
 import os
+import asyncio
+import threading
 import re
 from flask import Flask
 from pyrogram import Client, filters
 from pyrogram.types import ChatPermissions
+from collections import defaultdict
+
 from badwords_hindi import HINDI_BAD_WORDS
 from badwords_english import ENGLISH_BAD_WORDS
 
-api_id = int(os.environ.get("API_ID"))
-api_hash = os.environ.get("API_HASH")
-bot_token = os.environ.get("BOT_TOKEN")
+# ================= CONFIG =================
+API_ID = int(os.environ.get("API_ID"))
+API_HASH = os.environ.get("API_HASH")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
+MAX_WARNINGS = 3
+
+BAD_WORDS = HINDI_BAD_WORDS + ENGLISH_BAD_WORDS
+
+bot = Client("abuse-bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 app = Flask(__name__)
+warnings = defaultdict(int)
 
-bot = Client(
-    "abusebot",
-    api_id=api_id,
-    api_hash=api_hash,
-    bot_token=bot_token
-)
-
-WARN_LIMIT = 3
-warnings = {}
-
-# 🔥 Normalize Roman text (masked detection)
-def normalize_roman(text):
+# ================= NORMALIZE =================
+def normalize(text):
     text = text.lower()
-
-    replacements = {
-        "@": "a",
-        "4": "a",
-        "0": "o",
-        "$": "s",
-        "1": "i",
-        "!": "i",
-        "3": "e",
-        "7": "t"
-    }
-
-    for k, v in replacements.items():
-        text = text.replace(k, v)
-
-    text = re.sub(r"[.\s_\-]", "", text)
-
+    text = text.replace("@", "a").replace("0", "o").replace("$", "s")
+    text = re.sub(r'[^a-zA-Zअ-ह]', '', text)
     return text
 
+# ================= START COMMAND =================
+@bot.on_message(filters.private & filters.command("start"))
+async def start_handler(client, message):
+    await message.reply(
+        "👋 Hello!\n\n"
+        "🤖 I am an Abuse Protection Bot.\n\n"
+        "🔹 Features:\n"
+        "• Detect Hindi & English abusive words\n"
+        "• Auto delete abusive messages\n"
+        "• 3 Warnings system\n"
+        "• Auto mute after 3 warnings\n\n"
+        "Add me to your group and make me admin with delete + restrict permissions."
+    )
 
-# 🔥 Abuse checker
-def contains_abuse(original_text):
-
-    roman_text = normalize_roman(original_text)
-    lower_text = original_text.lower()
-
-    # Roman Hindi check
-    for word in HINDI_BAD_WORDS:
-        if word in roman_text:
-            return True
-
-    # English check
-    for word in ENGLISH_BAD_WORDS:
-        if word in roman_text:
-            return True
-
-    # Devanagari check (direct match)
-    for word in HINDI_BAD_WORDS:
-        if word in lower_text:
-            return True
-
-    return False
-
-
-@bot.on_message(filters.text & filters.group)
+# ================= GROUP MESSAGE FILTER =================
+@bot.on_message(filters.group & filters.text)
 async def check_abuse(client, message):
-    if not message.from_user:
-        return
-
-    chat_id = message.chat.id
     user_id = message.from_user.id
+    chat_id = message.chat.id
 
-    member = await client.get_chat_member(chat_id, user_id)
-    if member.status in ["administrator", "creator"]:
-        return
+    text = normalize(message.text)
 
-    if contains_abuse(message.text):
+    for word in BAD_WORDS:
+        if word in text:
+            await message.delete()
+            warnings[user_id] += 1
 
-        await message.delete()
+            if warnings[user_id] >= MAX_WARNINGS:
+                await client.restrict_chat_member(
+                    chat_id,
+                    user_id,
+                    ChatPermissions(can_send_messages=False)
+                )
+                await message.reply(
+                    f"🚫 User muted after {MAX_WARNINGS} warnings."
+                )
+                warnings[user_id] = 0
+            else:
+                await message.reply(
+                    f"⚠ Warning {warnings[user_id]}/{MAX_WARNINGS}\nAbusive language not allowed."
+                )
+            break
 
-        if chat_id not in warnings:
-            warnings[chat_id] = {}
-
-        if user_id not in warnings[chat_id]:
-            warnings[chat_id][user_id] = 0
-
-        warnings[chat_id][user_id] += 1
-        warn_count = warnings[chat_id][user_id]
-
-        await message.reply_text(
-            f"⚠ Warning {warn_count}/{WARN_LIMIT}"
-        )
-
-        if warn_count >= WARN_LIMIT:
-            await client.restrict_chat_member(
-                chat_id,
-                user_id,
-                ChatPermissions()
-            )
-
-            await message.reply_text("🔇 User muted (3 warnings reached)")
-            warnings[chat_id][user_id] = 0
-
-
+# ================= HEALTH CHECK =================
 @app.route("/")
 def home():
-    return "Abuse Protection Bot Running!"
+    return "Bot is running!"
+
+# ================= RUN BOT + FLASK =================
+def run_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(bot.start())
+    loop.run_forever()
 
 if __name__ == "__main__":
-    bot.start()
-    port = int(os.environ.get("PORT", 8080))
+    threading.Thread(target=run_bot).start()
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
